@@ -16,8 +16,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 URL = "https://cmlab.cau.ac.kr/publications"
-OUTPUT = Path("data/publication-stats.js")
-
+REPOSITORY_ROOT = Path(__file__).resolve().parent.parent
+OUTPUT = REPOSITORY_ROOT / "data" / "publication-stats.js"
 
 def normalize(text: str) -> str:
     text = html.unescape(text)
