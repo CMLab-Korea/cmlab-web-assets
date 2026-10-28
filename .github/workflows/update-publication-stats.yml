@@ -32,13 +32,29 @@ jobs:
           python -m playwright install --with-deps chromium
 
       - name: Parse rendered Publications Summary and generate JS
-        run: python scripts/sync_publication_stats.py
+        shell: bash
+        run: |
+          set -euo pipefail
+          python "$GITHUB_WORKSPACE/scripts/sync_publication_stats.py"
+          echo "Working directory: $(pwd)"
+          echo "Repository root: $GITHUB_WORKSPACE"
+          echo "Generated file check:"
+          ls -lh "$GITHUB_WORKSPACE/data/" || true
+          if [ ! -s "$GITHUB_WORKSPACE/data/publication-stats.js" ]; then
+            echo "::error::Expected statistics file was not created under the repository root."
+            find "$GITHUB_WORKSPACE" -name 'publication-stats.js' -print
+            exit 1
+          fi
+          echo 'Publication statistics JS exists and is nonempty.'
 
       - name: Commit updated statistics when changed
         id: update
         shell: bash
         run: |
-          git add data/publication-stats.js
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE"
+          test -s data/publication-stats.js || { echo '::error::Missing data/publication-stats.js before git add'; exit 1; }
+          git add -- data/publication-stats.js
           if git diff --cached --quiet; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
             echo 'No new publication counts; skipping commit.'
