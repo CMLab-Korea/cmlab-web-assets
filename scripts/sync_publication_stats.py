@@ -126,3 +126,6 @@ def main() -> int:
     )
     print(f"Updated {OUTPUT.as_posix()}", flush=True)
     return 0
+
+if __name__ == "__main__":
+    sys.exit(main())
