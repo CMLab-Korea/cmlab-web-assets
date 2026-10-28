@@ -3,11 +3,16 @@ name: Sync CMLab publication statistics
 on:
   workflow_dispatch:
   schedule:
-    # Every 6 hours, UTC. GitHub scheduled jobs may start later than the specified time.
+    # Every 6 hours in UTC
     - cron: '17 */6 * * *'
 
 permissions:
   contents: write
+  pages: write
+
+concurrency:
+  group: cmlab-publication-statistics
+  cancel-in-progress: false
 
 jobs:
   sync-publication-stats:
@@ -15,82 +20,39 @@ jobs:
     steps:
       - name: Check out asset repository
         uses: actions/checkout@v4
-        with:
-          persist-credentials: true
 
-      - name: Parse Summary and build public JS
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install browser for Google Sites rendering
+        run: |
+          python -m pip install 'playwright>=1.55,<2'
+          python -m playwright install --with-deps chromium
+
+      - name: Parse rendered Publications Summary and generate JS
+        run: python scripts/sync_publication_stats.py
+
+      - name: Commit updated statistics when changed
+        id: update
         shell: bash
         run: |
-          python3 - <<'PY'
-          import html
-          import json
-          import re
-          from datetime import datetime, timezone
-          from html.parser import HTMLParser
-          from pathlib import Path
-          from urllib.request import Request, urlopen
+          git add data/publication-stats.js
+          if git diff --cached --quiet; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo 'No new publication counts; skipping commit.'
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'Auto-update CMLab publication statistics'
+          git push origin "HEAD:${GITHUB_REF_NAME}"
+          echo "changed=true" >> "$GITHUB_OUTPUT"
 
-          URL = 'https://cmlab.cau.ac.kr/publications'
-          OUTPUT = Path('data/publication-stats.js')
-
-          class TextExtractor(HTMLParser):
-              def __init__(self):
-                  super().__init__(convert_charrefs=True)
-                  self.skip = 0
-                  self.fragments = []
-
-              def handle_starttag(self, tag, attrs):
-                  if tag in ('script', 'style', 'noscript', 'svg'):
-                      self.skip += 1
-                  elif tag in ('p', 'div', 'li', 'br', 'h1', 'h2', 'h3'):
-                      self.fragments.append(' ')
-
-              def handle_endtag(self, tag):
-                  if tag in ('script', 'style', 'noscript', 'svg') and self.skip:
-                      self.skip -= 1
-                  elif tag in ('p', 'div', 'li', 'br', 'h1', 'h2', 'h3'):
-                      self.fragments.append(' ')
-
-              def handle_data(self, data):
-                  if not self.skip:
-                      self.fragments.append(data)
-
-          request = Request(URL, headers={
-              'User-Agent': 'Mozilla/5.0 CMLab-Publications-Sync/1.0',
-              'Accept': 'text/html',
-          })
-          with urlopen(request, timeout=30) as response:
-              page_html = response.read().decode('utf-8', errors='replace')
-
-          parser = TextExtractor()
-          parser.feed(page_html)
-          visible = html.unescape(' '.join(parser.fragments))
-          visible = re.sub(r'\s+', ' ', visible).strip()
-          # Unicode hyphen variants in source content are normalized.
-          visible = re.sub(r'[\u2010-\u2015\u2212]', '-', visible)
-
-          pattern = (
-              r'Summary\s*:\s*(\d+)\s+peer-reviewed international publications,\s*'
-              r'including\s*(\d+)\s+top-tier AI/CV conference papers\s*'
-              r'and\s*(\d+)\s+international journal papers;\s*'
-              r'(\d+)\s+additional manuscripts are currently under review or available as preprints'
-          )
-          match = re.search(pattern, visible, re.IGNORECASE)
-          if not match:
-              raise RuntimeError('Expected CMLab Summary sentence was not found; existing stats will not be overwritten.')
-
-          total, conference, journal, preprint = (int(n) for n in match.groups())
-          if total != conference + journal or any(n < 0 or n > 10000 for n in (total, conference, journal, preprint)):
-              raise ValueError('Stats inconsistent; refusing to publish a broken update.')
-
-          stats = {
-              'total': total,
-              'conference': conference,
-              'journal': journal,
-              'preprint': preprint,
-              'updated_at': datetime.now(timezone.utc).isoformat(),
-              'source': URL,
-          }
-          # Avoid needless commits when only the check time changes.
-          if OUTPUT.is_file():
-              old_js = OUTPUT.read_text(encoding='utf-8')
+      - name: Request GitHub Pages rebuild after statistics update
+        if: steps.update.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api --method POST "repos/${GITHUB_REPOSITORY}/pages/builds"
