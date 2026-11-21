@@ -30,7 +30,7 @@ jobs:
       - name: Fetch and validate PI Google Scholar metrics
         env:
           SERPAPI_API_KEY: ${{ secrets.SERPAPI_API_KEY }}
-        run: python scripts/sync_scholar_stats.py
+        run: python scripts/CMLab_sync_scholar_stats.py
 
       - name: Verify public statistics file
         shell: bash
