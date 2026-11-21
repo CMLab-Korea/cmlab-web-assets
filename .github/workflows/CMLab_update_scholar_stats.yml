@@ -1,0 +1,64 @@
+name: Sync CMLab Google Scholar metrics
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Every Monday at 10:41 Korea Standard Time (01:41 UTC).
+    - cron: '41 1 * * 1'
+
+permissions:
+  contents: write
+  pages: write
+
+concurrency:
+  group: cmlab-scholar-statistics
+  cancel-in-progress: false
+
+jobs:
+  sync-scholar-stats:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out CMLab asset repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Fetch and validate PI Google Scholar metrics
+        env:
+          SERPAPI_API_KEY: ${{ secrets.SERPAPI_API_KEY }}
+        run: python scripts/sync_scholar_stats.py
+
+      - name: Verify public statistics file
+        shell: bash
+        run: |
+          test -s data/scholar-stats.js || {
+            echo '::error::The Scholar metrics JavaScript was not generated.'
+            exit 1
+          }
+          echo 'Scholar metrics JS exists and is nonempty.'
+
+      - name: Commit updated metrics when changed
+        id: update
+        shell: bash
+        run: |
+          git add -- data/scholar-stats.js
+          if git diff --cached --quiet; then
+            echo 'changed=false' >> "$GITHUB_OUTPUT"
+            echo 'No changes to Scholar metrics; skipping commit.'
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'Auto-update CMLab Google Scholar metrics'
+          git push origin "HEAD:${GITHUB_REF_NAME}"
+          echo 'changed=true' >> "$GITHUB_OUTPUT"
+
+      - name: Rebuild GitHub Pages after Scholar metrics update
+        if: steps.update.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api --method POST "repos/${GITHUB_REPOSITORY}/pages/builds"
